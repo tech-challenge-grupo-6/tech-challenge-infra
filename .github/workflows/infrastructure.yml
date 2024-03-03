@@ -36,3 +36,6 @@ jobs:
 
       - name: "Terraform Plan"
         run: terraform plan -no-color
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve
