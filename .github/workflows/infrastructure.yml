@@ -6,13 +6,17 @@ on:
       - "main"
 
 jobs:
-  terraform-plan:
-    name: "Terraform Plan"
+  terraform-aws:
+    name: "Terraform AWS"
     runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./terraform
 
     steps:
       - name: "Checkout"
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: "Setup Terraform"
         uses: hashicorp/setup-terraform@v1
@@ -26,8 +30,9 @@ jobs:
 
       - name: "Terraform Init"
         run: terraform init -backend=false
-        working-directory: ./terraform
+
+      - name: Terraform Validate
+        run: terraform validate
 
       - name: "Terraform Plan"
         run: terraform plan -no-color
-        working-directory: ./terraform
