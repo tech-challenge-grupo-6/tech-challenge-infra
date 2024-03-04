@@ -36,6 +36,19 @@ resource "aws_ecr_repository" "controladorpagamento-fake" {
 
 # EKS CLuester
 
+# Filter out local zones, which are not currently supported 
+# with managed node groups
+data "aws_availability_zones" "available" {
+  filter {
+    name   = "opt-in-status"
+    values = ["opt-in-not-required"]
+  }
+}
+
+locals {
+  cluster_name = "tech-challenge-eks"
+}
+
 data "aws_ami" "eks_worker" {
   filter {
     name   = "name"
@@ -47,107 +60,101 @@ data "aws_ami" "eks_worker" {
 }
 
 module "vpc" {
-  source = "terraform-aws-modules/vpc/aws"
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "5.0.0"
 
-  name                 = "tech-challenge-vpc"
-  cidr                 = "10.0.0.0/16"
-  azs                  = ["us-east-1a", "us-east-1b", "us-east-1c"]
-  private_subnets      = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
-  public_subnets       = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
+  name = "tech-challenge-vpc"
+
+  cidr = "10.0.0.0/16"
+  azs  = slice(data.aws_availability_zones.available.names, 0, 3)
+
+  private_subnets = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+  public_subnets  = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
+
   enable_nat_gateway   = true
   single_nat_gateway   = true
   enable_dns_hostnames = true
 
   tags = {
-    "kubernetes.io/cluster/my-eks-cluster" = "shared"
-    "techchallenge"                        = ""
+    "techchallenge" = ""
   }
 
   public_subnet_tags = {
-    "kubernetes.io/cluster/my-eks-cluster" = "shared"
-    "kubernetes.io/role/elb"               = "1"
-    "techchallenge"                        = ""
+    "kubernetes.io/cluster/${local.cluster_name}" = "shared"
+    "kubernetes.io/role/elb"                      = 1
+    "techchallenge"                               = ""
   }
 
   private_subnet_tags = {
-    "kubernetes.io/cluster/my-eks-cluster" = "shared"
-    "kubernetes.io/role/internal-elb"      = "1"
-    "techchallenge"                        = ""
+    "kubernetes.io/cluster/${local.cluster_name}" = "shared"
+    "kubernetes.io/role/internal-elb"             = 1
+    "techchallenge"                               = ""
   }
-}
-
-resource "aws_iam_role" "esk_node_role" {
-  name = "esk_node_role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      },
-    ]
-  })
-
-  tags = {
-    "techchallenge" = ""
-  }
-}
-
-resource "aws_iam_role_policy_attachment" "example-AmazonEKSWorkerNodePolicy" {
-  role       = aws_iam_role.esk_node_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-}
-
-resource "aws_iam_role_policy_attachment" "example-AmazonEKS_CNI_Policy" {
-  role       = aws_iam_role.esk_node_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
-}
-
-resource "aws_iam_role_policy_attachment" "example-AmazonEC2ContainerRegistryReadOnly" {
-  role       = aws_iam_role.esk_node_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
 module "eks" {
-  source = "terraform-aws-modules/eks/aws"
+  source  = "terraform-aws-modules/eks/aws"
+  version = "19.15.3"
 
-  cluster_name    = "tech-challenge-eks"
+  cluster_name    = local.cluster_name
   cluster_version = "1.29"
-  vpc_id          = module.vpc.vpc_id
-  subnet_ids      = module.vpc.private_subnets
 
-  tags = {
-    "techchallenge" = ""
+  vpc_id                         = module.vpc.vpc_id
+  subnet_ids                     = module.vpc.private_subnets
+  cluster_endpoint_public_access = true
+
+  eks_managed_node_group_defaults = {
+    ami_type = "AL2_x86_64"
   }
 
-  enable_cluster_creator_admin_permissions = true
-
   eks_managed_node_groups = {
-    eks_nodes = {
-      desired_capacity = 1
-      max_capacity     = 1
-      min_capacity     = 1
+    one = {
+      name = "node-group-1"
 
-      instance_type = "t3.micro"
+      instance_types = ["t3.small"]
 
-      root_volume_size = "20"
-      root_volume_type = "gp2"
+      min_size     = 1
+      max_size     = 3
+      desired_size = 2
 
-      ami_id      = data.aws_ami.eks_worker.id
-      iam_role_id = aws_iam_role.esk_node_role
-
-      additional_tags = {
-        Environment   = "test"
-        Name          = "eks-worker-node"
-        techchallenge = ""
-      }
       tags = {
         "techchallenge" = ""
       }
     }
+  }
+  tags = {
+    "techchallenge" = ""
+  }
+}
+
+
+# https://aws.amazon.com/blogs/containers/amazon-ebs-csi-driver-is-now-generally-available-in-amazon-eks-add-ons/ 
+data "aws_iam_policy" "ebs_csi_policy" {
+  arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
+module "irsa-ebs-csi" {
+  source  = "terraform-aws-modules/iam/aws//modules/iam-assumable-role-with-oidc"
+  version = "4.7.0"
+
+  create_role                   = true
+  role_name                     = "AmazonEKSTFEBSCSIRole-${module.eks.cluster_name}"
+  provider_url                  = module.eks.oidc_provider
+  role_policy_arns              = [data.aws_iam_policy.ebs_csi_policy.arn]
+  oidc_fully_qualified_subjects = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
+  tags = {
+    "techchallenge" = ""
+  }
+}
+
+resource "aws_eks_addon" "ebs-csi" {
+  cluster_name             = module.eks.cluster_name
+  addon_name               = "aws-ebs-csi-driver"
+  addon_version            = "v1.20.0-eksbuild.1"
+  service_account_role_arn = module.irsa-ebs-csi.iam_role_arn
+  tags = {
+    "eks_addon"     = "ebs-csi"
+    "terraform"     = "true"
+    "techchallenge" = ""
   }
 }
