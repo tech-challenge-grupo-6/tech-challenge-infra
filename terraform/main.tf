@@ -34,6 +34,28 @@ resource "aws_ecr_repository" "controladorpagamento-fake" {
   }
 }
 
+resource "aws_ecr_repository" "controladorpagamento-app" {
+  name                 = "controladorpagamento-app"
+  image_tag_mutability = "MUTABLE"
+  tags = {
+    "techchallenge" = ""
+  }
+  tags_all = {
+    "techchallenge" = ""
+  }
+}
+
+resource "aws_ecr_repository" "controladorproducao-app" {
+  name                 = "controladorproducao-app"
+  image_tag_mutability = "MUTABLE"
+  tags = {
+    "techchallenge" = ""
+  }
+  tags_all = {
+    "techchallenge" = ""
+  }
+}
+
 # EKS CLuester
 
 # Filter out local zones, which are not currently supported 
@@ -156,5 +178,57 @@ resource "aws_eks_addon" "ebs-csi" {
     "eks_addon"     = "ebs-csi"
     "terraform"     = "true"
     "techchallenge" = ""
+  }
+}
+
+# Cache
+
+resource "aws_security_group" "redis_security_group" {
+  name        = "redis-security-group"
+  description = "Security group for Redis"
+  vpc_id      = module.vpc.vpc_id # Assuming your EKS module exposes the VPC ID
+
+  ingress {
+    from_port   = 6379
+    to_port     = 6379
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Adjust this to your needs
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    techchallenge = "Cache Security Group"
+  }
+}
+
+resource "aws_elasticache_subnet_group" "redis_subnet_group" {
+  name       = "redis-subnet-group"
+  subnet_ids = module.vpc.private_subnets # Assuming your EKS module exposes the subnet IDs
+
+  tags = {
+    techchallenge = "Cache Subnet Group"
+  }
+}
+
+resource "aws_elasticache_cluster" "redis_cluster" {
+  cluster_id           = "controlador-pedidos-cache"
+  engine               = "redis"
+  node_type            = "cache.t2.micro"
+  num_cache_nodes      = 1
+  parameter_group_name = "default.redis7"
+  engine_version       = "7.1"
+  port                 = 6379
+
+  subnet_group_name  = aws_elasticache_subnet_group.redis_subnet_group.name
+  security_group_ids = [aws_security_group.redis_security_group.id]
+
+  tags = {
+    techchallenge = "Redis Cache"
   }
 }
